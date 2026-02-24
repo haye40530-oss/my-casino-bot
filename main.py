@@ -191,6 +191,36 @@ def callback_all(call):
         else:
             bot.send_message(target_id, "❌ Otmadi!")
             bot.edit_message_text("Rad etildi ❌", call.message.chat.id, call.message.message_id)
+# ... 193-qator (bot.edit_message_text dan keyin) ...
+
+# --- ADMIN ZAXIRA NUSXA OLISH ---
+@bot.message_handler(commands=['backup'])
+def send_backup(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        with open('casino_uzb.db', 'rb') as doc:
+            bot.send_document(ADMIN_ID, doc, caption=f"📅 Zaxira nusxa: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    except Exception as e:
+        bot.send_message(ADMIN_ID, f"❌ Xato: {e}")
+
+# ... (Yuqorida admin_call funksiyasi bor)
+
+# --- ADMIN ZAXIRA NUSXA OLISH ---
+@bot.message_handler(commands=['backup'])
+def send_backup(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        # Bazani yopmasdan o'qish uchun ulanishni tekshiramiz
+        with open('casino_uzb.db', 'rb') as doc:
+            bot.send_document(ADMIN_ID, doc, caption=f"📅 Zaxira nusxa: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n⚠️ Bu faylni xavfsiz joyda saqlang!")
+    except Exception as e:
+        bot.send_message(ADMIN_ID, f"❌ Xatolik yuz berdi: {e}")
+
+# KODNING ENG OXIRGI QATORI (O'ZGARTIRMANG)
+bot.infinity_polling()
+
 
 bot.infinity_polling()
 
