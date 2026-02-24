@@ -11,6 +11,7 @@ bot = telebot.TeleBot(TOKEN)
 ADMIN_ID = 8299021738
 KARTA_RAQAM = "9860 6067 5582 9722"
 QARZ_LIMITI = 500000
+MAX_YUTUQ = 100000 # Maksimal yutuq chegarasi
 
 def db_op(query, params=(), is_select=False):
     conn = sqlite3.connect('casino_uzb.db', check_same_thread=False, timeout=30)
