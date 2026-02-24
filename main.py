@@ -10,6 +10,7 @@ TOKEN = '8609558089:AAExgvs1_XR5jlj9RGC55zZStvc7nV_Z6hE'
 bot = telebot.TeleBot(TOKEN)
 ADMIN_ID = 8299021738
 KARTA_RAQAM = "9860 6067 5582 9722"
+QARZ_LIMITI = 500000
 
 def db_op(query, params=(), is_select=False):
     conn = sqlite3.connect('casino_uzb.db', check_same_thread=False, timeout=30)
@@ -21,174 +22,158 @@ def db_op(query, params=(), is_select=False):
     except Exception as e: print(f"Baza xatosi: {e}")
     finally: conn.close()
 
-# Ma'lumotlar bazasini yangilash
+# Jadvallar
 db_op('''CREATE TABLE IF NOT EXISTS users 
          (id INTEGER PRIMARY KEY, name TEXT, balance REAL DEFAULT 10000, 
-          debt REAL DEFAULT 0, debt_time TEXT)''')
-db_op('''CREATE TABLE IF NOT EXISTS history 
-         (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, 
-          amount REAL, type TEXT, date TEXT)''')
+          debt REAL DEFAULT 0, debt_time TEXT, 
+          nasiya_count INTEGER DEFAULT 0, last_nasiya_date TEXT)''')
 
-# --- QARZNI VA FOIZNI TEKSHIRISH (LOGIKA) ---
-def update_debt_and_get(uid):
-    u = db_op("SELECT debt, debt_time, balance FROM users WHERE id=?", (uid,), is_select=True)
-    if not u or u[0][0] <= 0 or not u[0][1]:
-        return (u[0][0] if u else 0, u[0][2] if u else 0)
-
-    debt = u[0][0]
-    balance = u[0][2]
-    debt_time = datetime.strptime(u[0][1], "%Y-%m-%d %H:%M:%S")
-    now = datetime.now()
-    diff = now - debt_time
-    hours_passed = diff.total_seconds() / 3600
-
-    old_debt = debt
-    # 48 soatdan o'tsa +50% birdaniga
-    if hours_passed >= 48:
-        debt = debt * 1.5
-    # 12 soatdan o'tsa, har 1 soat uchun +5%
-    elif hours_passed > 12:
-        extra_hours = int(hours_passed - 12)
-        for _ in range(extra_hours):
-            debt += debt * 0.05
-
-    if debt != old_debt:
-        db_op("UPDATE users SET debt = ? WHERE id=?", (debt, uid))
+# --- QARZNI YANGILASH ---
+def get_updated_stats(uid):
+    u = db_op("SELECT debt, debt_time, balance, nasiya_count, last_nasiya_date FROM users WHERE id=?", (uid,), is_select=True)
+    if not u: return 0, 0, 0, ""
+    debt, d_time_str, balance, n_count, last_date = u[0]
     
-    return (debt, balance)
+    today = datetime.now().strftime("%Y-%m-%d")
+    if last_date != today:
+        db_op("UPDATE users SET nasiya_count = 0, last_nasiya_date = ? WHERE id=?", (today, uid))
+        n_count = 0
 
-# --- MENYULAR ---
+    if debt > 0 and d_time_str:
+        d_time = datetime.strptime(d_time_str, "%Y-%m-%d %H:%M:%S")
+        hours = (datetime.now() - d_time).total_seconds() / 3600
+        new_debt = debt
+        if hours >= 48: new_debt = debt * 1.5
+        elif hours > 12:
+            for _ in range(int(hours - 12)): new_debt += new_debt * 0.05
+        if new_debt != debt:
+            db_op("UPDATE users SET debt = ? WHERE id=?", (new_debt, uid))
+            debt = new_debt
+    return debt, balance, n_count, today
+
 def main_menu(uid):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("🎰 Super Slot (100k)", "🎯 Dart (50k)", "🏀 Basket (50k)")
-    markup.add("🎲 Kubik (20k)", "🎳 Bouling (30k)")
     markup.add("👤 Profil", "🏆 Reyting", "📜 Tarix")
-    markup.add("💸 TEZKOR NASIYA", "🔴 Qarzni to'lash")
-    if uid == ADMIN_ID: markup.add("📊 Admin Panel")
+    markup.add("💸 Nasiya olish", "🔴 Qarzni to'lash")
     return markup
 
-# --- START ---
 @bot.message_handler(commands=['start'])
 def start(message):
     uid = message.from_user.id
     user = db_op("SELECT id FROM users WHERE id=?", (uid,), is_select=True)
-    if user:
-        bot.send_message(message.chat.id, "💰 Xush kelibsiz! Bugun omadingiz chopadi!\n\n💸 Pulingiz tugab qoldimi? **Nasiya olish** bo'limidan foydalaning!", reply_markup=main_menu(uid), parse_mode="Markdown")
+    if not user:
+        bot.send_message(uid, "Ismingizni kiriting:")
+        bot.register_next_step_handler(message, lambda m: db_op("INSERT INTO users (id, name, last_nasiya_date) VALUES (?, ?, ?)", (uid, m.text, datetime.now().strftime("%Y-%m-%d"))) or bot.send_message(uid, "Xush kelibsiz!", reply_markup=main_menu(uid)))
     else:
-        bot.send_message(message.chat.id, "Ismingizni kiriting:")
-        bot.register_next_step_handler(message, get_name)
+        bot.send_message(uid, "💰 Xush kelibsiz!", reply_markup=main_menu(uid))
 
-def get_name(message):
-    name = message.text
-    db_op("INSERT OR IGNORE INTO users (id, name, balance) VALUES (?, ?, 10000)", (message.from_user.id, name))
-    bot.send_message(message.chat.id, f"Tabriklayman {name}! Sizga 10,000 s bonus berildi. O'yinni boshlang!", reply_markup=main_menu(message.from_user.id))
-
-# --- ASOSIY HANDLER ---
 @bot.message_handler(func=lambda m: True)
-def main_handler(message):
+def handle_text(message):
     uid = message.from_user.id
-    text = message.text
-    debt, balance = update_debt_and_get(uid)
-
-    if text == "👤 Profil":
-        msg = f"👤 **PROFILINGIZ**\n\n💰 Balans: {balance:,.0f} s\n🔴 Qarz: {debt:,.0f} s\n"
-        if debt > 0:
-            msg += "\n⚠️ **DIQQAT!** Qarzni 12 soat ichida to'lamasangiz, soatiga 5% dan qo'shiladi!"
-        bot.send_message(message.chat.id, msg, parse_mode="Markdown")
-
-    elif text == "💸 TEZKOR NASIYA":
-        if debt > 0:
-            bot.send_message(message.chat.id, "❌ Sizda amaldagi qarz bor. Avval uni to'lang!")
-        else:
-            bot.send_message(message.chat.id, "💰 **KAZINO SIZGA ISHONADI!**\n200,000 so'mgacha nasiya oling.\n\nSummani yozing (Masalan: 50000):")
-            bot.register_next_step_handler(message, set_debt)
-
-    elif text == "🎰 Super Slot (100k)":
-        play_game(message, '🎰', [1, 22, 43, 64], 100000, 500000)
-    elif text == "🎯 Dart (50k)":
-        play_game(message, '🎯', [6, 5], 50000, 150000)
-    elif text == "🏀 Basket (50k)":
-        play_game(message, '🏀', [4, 5], 50000, 120000)
-    elif text == "🎲 Kubik (20k)":
-        play_game(message, '🎲', [6], 20000, 100000)
-    elif text == "🎳 Bouling (30k)":
-        play_game(message, '🎳', [6, 5], 30000, 90000)
-
-    elif text == "🔴 Qarzni to'lash":
-        if debt <= 0:
-            bot.send_message(message.chat.id, "Sizda qarz mavjud emas. O'yindan zavqlaning!")
-        else:
-            bot.send_message(message.chat.id, f"Joriy qarz: {debt:,.0f} s\n\nKarta: `{KARTA_RAQAM}`\nTo'lagan summani yozing:")
-            bot.register_next_step_handler(message, pay_req)
-
-    elif text == "🏆 Reyting":
-        top = db_op("SELECT name, balance FROM users ORDER BY balance DESC LIMIT 10", is_select=True)
-        res = "🏆 **TOP 10 BOYVATCHALAR:**\n\n"
-        for i, u in enumerate(top, 1): res += f"{i}. {u[0]} — {u[1]:,.0f} s\n"
-        bot.send_message(message.chat.id, res)
-
-    elif text == "📜 Tarix":
-        h = db_op("SELECT amount, type, date FROM history WHERE user_id=? ORDER BY id DESC LIMIT 5", (uid,), is_select=True)
-        res = "📜 **AMALLAR TARIXI:**\n\n" + ("\n".join([f"📅 {i[2]}: {i[0]:,.0f} s ({i[1]})" for i in h]) if h else "Hali harakat yo'q")
-        bot.send_message(message.chat.id, res)
-
-# --- FUNKSIYALAR ---
-def play_game(message, emoji, win_values, cost, prize):
-    uid = message.from_user.id
-    debt, balance = update_debt_and_get(uid)
+    debt, balance, n_count, _ = get_updated_stats(uid)
     
-    if balance < cost:
-        bot.send_message(message.chat.id, f"⚠️ Mablag' yetarli emas! Nasiya oling va omadingizni sinang!")
-        return
+    if message.text == "👤 Profil":
+        bot.send_message(uid, f"👤 **PROFIL**\n💰 Balans: {balance:,.0f} s\n🔴 Qarz: {debt:,.0f} s\n📅 Bugun: {n_count}/2 marta")
+    
+    elif message.text == "💸 Nasiya olish":
+        if n_count >= 2:
+            bot.send_message(uid, "⚠️ Kunlik limit (2 marta) tugadi!")
+        elif debt >= QARZ_LIMITI:
+            bot.send_message(uid, "❌ Qarz limitingiz to'lgan!")
+        else:
+            bot.send_message(uid, "Qancha nasiya kerak? Summani yozing:")
+            bot.register_next_step_handler(message, confirm_nasiya_step)
 
-    db_op("UPDATE users SET balance = balance - ? WHERE id=?", (cost, uid))
-    msg = bot.send_dice(message.chat.id, emoji=emoji)
-    time.sleep(4)
+    elif message.text == "🔴 Qarzni to'lash":
+        if debt <= 0: bot.send_message(uid, "Qarzingiz yo'q.")
+        else:
+            bot.send_message(uid, f"To'lanadigan: {debt:,.0f} s\nKarta: `{KARTA_RAQAM}`\nSummani yozing:")
+            bot.register_next_step_handler(message, pay_start)
 
-    if msg.dice.value in win_values:
-        db_op("UPDATE users SET balance = balance + ? WHERE id=?", (prize, uid))
-        bot.reply_to(msg, f"🚀 DAHSHT! SIZ YUTDINGIZ!\n💰 +{prize:,} so'm balansga!")
-    else:
-        bot.reply_to(msg, "😔 Omadsizlik... Yana bir bor urinib ko'ring!")
+    elif "k)" in message.text:
+        cost = 100000 if "100k" in message.text else 50000
+        if balance < cost: bot.send_message(uid, "Mablag' yetarli emas!")
+        else:
+            db_op("UPDATE users SET balance = balance - ? WHERE id=?", (cost, uid))
+            emoji = '🎰' if "Slot" in message.text else ('🎯' if "Dart" in message.text else '🏀')
+            res = bot.send_dice(uid, emoji=emoji)
+            time.sleep(4)
+            if res.dice.value in [1, 22, 43, 64, 6, 5]:
+                win = cost * 4
+                db_op("UPDATE users SET balance = balance + ? WHERE id=?", (win, uid))
+                bot.send_message(uid, f"🎉 YUTDINGIZ! +{win:,} so'm!")
+            else: bot.send_message(uid, "😔 Yutqazdingiz.")
 
-def set_debt(message):
+# --- NASIYA TASDIQLASH BOSQICHI ---
+def confirm_nasiya_step(message):
     try:
         amt = float(message.text)
-        if amt > 200000 or amt < 1000:
-            bot.send_message(message.chat.id, "❌ Nasiya miqdori 1,000 - 200,000 oralig'ida bo'lishi kerak!")
+        uid = message.from_user.id
+        debt, _, n_count, _ = get_updated_stats(uid)
+        
+        if amt + debt > QARZ_LIMITI:
+            bot.send_message(uid, "❌ Limitdan oshib ketmoqda!")
             return
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        date_ui = datetime.now().strftime("%d.%m %H:%M")
-        db_op("UPDATE users SET balance = balance + ?, debt = ?, debt_time = ? WHERE id=?", 
-              (amt, amt, now_str, message.from_user.id))
-        db_op("INSERT INTO history (user_id, amount, type, date) VALUES (?, ?, ?, ?)", (message.from_user.id, amt, "Nasiya olindi", date_ui))
-        bot.send_message(message.chat.id, f"✅ Tabriklaymiz! {amt:,.0f} so'm berildi. 12 soatdan keyin foizlar ishga tushadi!")
-    except: bot.send_message(message.chat.id, "Faqat raqam yozing!")
 
-def pay_req(message):
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Tastiqlayman ✅", callback_data=f"nas_v_{amt}"),
+                   types.InlineKeyboardButton("Orqaga 🔙", callback_data="nas_x"))
+        
+        shartnoma = (f"⚠️ **QARZ SHARTNOMASI**\n\n"
+                     f"💰 Summa: {amt:,.0f} so'm\n"
+                     f"⏰ Muddat: 12 soat (foizsiz)\n\n"
+                     f"🔴 **Agar 12 soatda to'lanmasa:**\n"
+                     f"- Har 1 soat uchun **5%** ustama qo'shiladi.\n"
+                     f"- 48 soatdan keyin jarima **50%** ni tashkil etadi.\n\n"
+                     f"Qarz olishga rozimisiz?")
+        
+        bot.send_message(uid, shartnoma, reply_markup=markup, parse_mode="Markdown")
+    except:
+        bot.send_message(message.chat.id, "Faqat son kiriting!")
+
+def pay_start(message):
     try:
         amt = float(message.text)
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"p_y_{message.from_user.id}_{amt}"))
-        bot.send_message(ADMIN_ID, f"🔔 **QARZ TO'LOVI**\nID: {message.from_user.id}\nSumma: {amt:,.0f} s", reply_markup=markup)
-        bot.send_message(message.chat.id, "✅ So'rov yuborildi. Admin tasdiqlashi bilan qarz o'chadi.")
+        markup.add(types.InlineKeyboardButton("Tastiqlash ✅", callback_data=f"pay_v_{message.from_user.id}_{amt}"),
+                   types.InlineKeyboardButton("Otmadi ❌", callback_data=f"pay_x_{message.from_user.id}"))
+        bot.send_message(ADMIN_ID, f"🔔 TO'LOV: {amt:,} s\nID: {message.from_user.id}", reply_markup=markup)
+        bot.send_message(message.chat.id, "Adminga yuborildi.")
     except: pass
 
 @bot.callback_query_handler(func=lambda call: True)
-def calls(call):
-    d = call.data.split("_")
-    if d[0] == "p" and d[1] == "y":
-        tid, amt = int(d[2]), float(d[3])
-        date_ui = datetime.now().strftime("%d.%m %H:%M")
-        db_op("UPDATE users SET debt = CASE WHEN debt >= ? THEN debt - ? ELSE 0 END WHERE id=?", (amt, amt, tid))
-        u = db_op("SELECT debt FROM users WHERE id=?", (tid,), is_select=True)
-        if u[0][0] <= 0:
-            db_op("UPDATE users SET debt_time = NULL WHERE id=?", (tid,))
-        db_op("INSERT INTO history (user_id, amount, type, date) VALUES (?, ?, ?, ?)", (tid, amt, "Qarz yopildi", date_ui))
-        bot.send_message(tid, "✅ Adminga rahmat ayting! To'lovingiz tasdiqlandi va qarz o'chirildi.")
-        bot.edit_message_text(f"✅ Tasdiqlandi (ID: {tid})", call.message.chat.id, call.message.message_id)
+def callback_all(call):
+    uid = call.from_user.id
+    data = call.data.split("_")
+
+    # Nasiyani tasdiqlash
+    if data[0] == "nas":
+        if data[1] == "v":
+            amt = float(data[2])
+            debt, _, n_count, today = get_updated_stats(uid)
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            db_op("UPDATE users SET balance = balance + ?, debt = debt + ?, debt_time = ?, nasiya_count = nasiya_count + 1, last_nasiya_date = ? WHERE id=?", (amt, amt, now, today, uid))
+            bot.edit_message_text(f"✅ {amt:,} so'm berildi. Omad!", call.message.chat.id, call.message.message_id)
+        else:
+            bot.edit_message_text("❌ Bekor qilindi.", call.message.chat.id, call.message.message_id)
+
+    # Admin to'lovni tasdiqlashi
+    elif data[0] == "pay":
+        act, target_id = data[1], int(data[2])
+        if act == "v":
+            amount = float(data[3])
+            db_op("UPDATE users SET debt = CASE WHEN debt > ? THEN debt - ? ELSE 0 END WHERE id=?", (amount, amount, target_id))
+            u = db_op("SELECT debt FROM users WHERE id=?", (target_id,), is_select=True)
+            if u[0][0] <= 0: db_op("UPDATE users SET debt_time = NULL WHERE id=?", (target_id,))
+            bot.send_message(target_id, "✅ To'lovingiz Tastiqlandi!")
+            bot.edit_message_text(f"Tastiqlandi ✅", call.message.chat.id, call.message.message_id)
+        else:
+            bot.send_message(target_id, "❌ To'lovingiz Otmadi!")
+            bot.edit_message_text(f"Rad etildi ❌", call.message.chat.id, call.message.message_id)
 
 bot.infinity_polling()
+                
     
     
 
