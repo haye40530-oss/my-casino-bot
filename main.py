@@ -2,7 +2,7 @@ import telebot
 from telebot import types
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- SOZLAMALAR ---
 TOKEN = '8609558089:AAExgvs1_XR5jlj9RGC55zZStvc7nV_Z6hE'
@@ -13,9 +13,8 @@ KARTA_RAQAM = "9860 6067 5582 9722"
 
 QARZ_LIMITI_1 = 300000
 QARZ_LIMITI_2 = 2000000
-MAX_YUTUQ = 110000
-YECHISH_MIN = 250000
 REFERAL_BONUS = 5000
+MAX_YUTUQ = 110000 
 
 def db_op(query, params=(), is_select=False):
     conn = sqlite3.connect('casino_uzb.db', check_same_thread=False, timeout=30)
@@ -27,29 +26,26 @@ def db_op(query, params=(), is_select=False):
     except Exception as e: print(f"Baza xatosi: {e}")
     finally: conn.close()
 
-# Jadvallarni yangilash (referal va qarz sanog'i qo'shildi)
 db_op('''CREATE TABLE IF NOT EXISTS users 
          (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, balance REAL DEFAULT 10000, 
           debt REAL DEFAULT 0, debt_time TEXT, 
-          nasiya_count INTEGER DEFAULT 0, total_nasiya_taken INTEGER DEFAULT 0,
-          referred_by INTEGER, last_nasiya_date TEXT)''')
+          total_nasiya_taken INTEGER DEFAULT 0, referred_by INTEGER)''')
 
 def get_updated_stats(uid):
-    u = db_op("SELECT debt, debt_time, balance, nasiya_count, total_nasiya_taken FROM users WHERE id=?", (uid,), is_select=True)
-    if not u: return 0, 0, 0, 0
-    debt, d_time_str, balance, n_count, total_n_taken = u[0]
+    u = db_op("SELECT debt, debt_time, balance, total_nasiya_taken FROM users WHERE id=?", (uid,), is_select=True)
+    if not u: return 0, 0, 0
+    debt, d_time_str, balance, total_n_taken = u[0]
     
     if debt > 0 and d_time_str:
         d_time = datetime.strptime(d_time_str, "%Y-%m-%d %H:%M:%S")
-        hours = (datetime.now() - d_time).total_seconds() / 3600
-        new_debt = debt
-        if hours >= 48: new_debt = debt * 1.5
-        elif hours > 12:
-            for _ in range(int(hours - 12)): new_debt += new_debt * 0.05
-        if new_debt != debt:
-            db_op("UPDATE users SET debt = ? WHERE id=?", (new_debt, uid))
-            debt = new_debt
-    return debt, balance, n_count, total_n_taken
+        deadline = d_time + timedelta(hours=12)
+        if datetime.now() > deadline:
+            overdue_hours = int((datetime.now() - deadline).total_seconds() / 3600)
+            if overdue_hours > 0:
+                new_debt = debt * (1.05 ** overdue_hours)
+                db_op("UPDATE users SET debt = ? WHERE id=?", (new_debt, uid))
+                debt = new_debt
+    return debt, balance, total_n_taken
 
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -63,144 +59,182 @@ def main_menu():
 def start(message):
     uid = message.from_user.id
     args = message.text.split()
-    
     user = db_op("SELECT id FROM users WHERE id=?", (uid,), is_select=True)
-    
     if not user:
-        referred_by = args[1] if len(args) > 1 and args[1].isdigit() else None
-        bot.send_message(uid, "Xush kelibsiz! Ro'yxatdan o'tish uchun ismingizni kiriting:")
-        bot.register_next_step_handler(message, lambda m: get_name(m, referred_by))
+        ref_by = args[1] if len(args) > 1 and args[1].isdigit() else None
+        bot.send_message(uid, "Xush kelibsiz! Ism va Familiyangizni kiriting:")
+        bot.register_next_step_handler(message, lambda m: get_name(m, ref_by))
     else:
-        bot.send_message(uid, "Xush kelibsiz!", reply_markup=main_menu())
+        bot.send_message(uid, "💰 Xush kelibsiz!", reply_markup=main_menu())
 
-def get_name(message, referred_by):
+def get_name(message, ref_by):
     name = message.text
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    markup.add(types.KeyboardButton("📞 Raqamni tasdiqlash", request_contact=True))
-    bot.send_message(message.chat.id, f"Salom {name}, raqamingizni yuboring:", reply_markup=markup)
-    bot.register_next_step_handler(message, lambda m: save_user(m, name, referred_by))
+    markup.add(types.KeyboardButton("📞 Telefonni tasdiqlash", request_contact=True))
+    bot.send_message(message.chat.id, "Telefon raqamingizni yuboring:", reply_markup=markup)
+    bot.register_next_step_handler(message, lambda m: save_user(m, name, ref_by))
 
-def save_user(message, name, referred_by):
-    if not message.contact:
-        return bot.send_message(message.chat.id, "Iltimos, tugmani bosing!")
-    
-    uid = message.from_user.id
-    phone = message.contact.phone_number
-    db_op("INSERT INTO users (id, name, phone, referred_by) VALUES (?, ?, ?, ?)", (uid, name, phone, referred_by))
-    
-    if referred_by:
-        db_op("UPDATE users SET balance = balance + ? WHERE id=?", (REFERAL_BONUS, referred_by))
-        bot.send_message(referred_by, f"🎉 Do'stingiz qo'shildi! Sizga {REFERAL_BONUS:,} UZS bonus berildi.")
-
-    bot.send_message(uid, "Muvaffaqiyatli ro'yxatdan o'tdingiz!", reply_markup=main_menu())
+def save_user(message, name, ref_by):
+    if not message.contact: return start(message)
+    db_op("INSERT INTO users (id, name, phone, referred_by) VALUES (?, ?, ?, ?)", (message.from_user.id, name, message.contact.phone_number, ref_by))
+    if ref_by:
+        db_op("UPDATE users SET balance = balance + ? WHERE id=?", (REFERAL_BONUS, ref_by))
+        bot.send_message(ref_by, f"🎉 Do'stingiz qo'shildi! +{REFERAL_BONUS:,} s")
+    bot.send_message(message.from_user.id, "✅ Ro'yxatdan o'tdingiz!", reply_markup=main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
     uid = message.from_user.id
     text = message.text
-    debt, balance, n_count, total_n_taken = get_updated_stats(uid)
+    debt, balance, total_n_taken = get_updated_stats(uid)
 
     if text == "👤 Profil":
         bot.send_message(uid, f"👤 **PROFIL**\n\n💰 Balans: {balance:,.0f} s\n🔴 Qarz: {debt:,.0f} s\n🆔 ID: `{uid}`")
-
-    elif text == "👥 Do'stlarni taklif qilish":
-        link = f"https://t.me/{(bot.get_me()).username}?start={uid}"
-        bot.send_message(uid, f"Do'stlaringizni taklif qiling va har biri uchun {REFERAL_BONUS:,} UZS oling!\n\nSizning havolangiz:\n{link}")
-
+    elif text == "🎰 O'yinlar":
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("🎰 Slot (100k)", "🎯 Dart (50k)", "🔙 Orqaga")
+        bot.send_message(uid, "O'yinni tanlang:", reply_markup=markup)
+    elif text in ["🎰 Slot (100k)", "🎯 Dart (50k)"]:
+        cost = 100000 if "100k" in text else 50000
+        if balance < cost: bot.send_message(uid, "Mablag' yetarli emas!")
+        else:
+            db_op("UPDATE users SET balance = balance - ? WHERE id=?", (cost, uid))
+            res = bot.send_dice(uid, emoji='🎰' if "Slot" in text else '🎯')
+            time.sleep(4)
+            if res.dice.value >= 4:
+                db_op("UPDATE users SET balance = balance + ? WHERE id=?", (MAX_YUTUQ, uid))
+                bot.send_message(uid, f"🎉 YUTDINGIZ! +{MAX_YUTUQ:,} s")
+            else: bot.send_message(uid, "😔 Yutqazdingiz.")
     elif text == "💸 Nasiya olish":
-        if debt > 0:
-            bot.send_message(uid, f"⚠️ Avvalgi qarzingizni to'lang: {debt:,.0f} s")
-            return
-        
         limit = QARZ_LIMITI_1 if total_n_taken == 0 else QARZ_LIMITI_2
-        bot.send_message(uid, f"Qancha nasiya olasiz?\nSiz uchun limit: {limit:,} UZS\n(Eng kamida 10,000 UZS)")
+        bot.send_message(uid, f"Limit: {limit:,} s. Summani yozing:", reply_markup=types.ReplyKeyboardRemove())
         bot.register_next_step_handler(message, lambda m: process_nasiya(m, limit))
-
+    elif text == "💰 Pul yechish":
+        if debt > 0: bot.send_message(uid, "⚠️ Qarzingiz bor!")
+        elif balance < 250000: bot.send_message(uid, "⚠️ Minimal 250,000 s")
+        else:
+            bot.send_message(uid, "Qancha yechmoqchisiz?")
+            bot.register_next_step_handler(message, withdraw_amount)
     elif text == "🔴 Qarzni to'lash":
         if debt <= 0: bot.send_message(uid, "Qarzingiz yo'q.")
         else:
-            bot.send_message(uid, f"To'lanadigan: {debt:,.0f} s\nKarta: `{KARTA_RAQAM}`\nSummani yozing:")
-            bot.register_next_step_handler(message, pay_start)
-
-    elif text == "💰 Pul yechish":
-        if debt > 0: bot.send_message(uid, "Qarzingiz bor paytda pul yechib bo'lmaydi!")
-        elif balance < YECHISH_MIN: bot.send_message(uid, f"Minimal yechish: {YECHISH_MIN:,} UZS")
-        else:
-            bot.send_message(uid, "Yechiladigan summani yozing:")
-            bot.register_next_step_handler(message, withdraw_init)
-    
-    elif text == "🎰 O'yinlar":
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("🎰 Slot", "🔙 Orqaga")
-        bot.send_message(uid, "O'yinni tanlang", reply_markup=markup)
-
+            bot.send_message(uid, f"Qarz: {debt:,.0f} s\nKarta: `{KARTA_RAQAM}`\nSummani yozing:")
+            bot.register_next_step_handler(message, pay_init)
+    elif text == "👥 Do'stlarni taklif qilish":
+        link = f"https://t.me/{(bot.get_me()).username}?start={uid}"
+        bot.send_message(uid, f"Havolangiz:\n{link}")
+    elif text == "👨‍💻 Admin murojaat":
+        bot.send_message(uid, f"Admin: {ADMIN_LINK}")
     elif text == "🔙 Orqaga":
         bot.send_message(uid, "Bosh menyu", reply_markup=main_menu())
 
-    elif text == "🎰 Slot":
-        if balance < 50000: bot.send_message(uid, "Kamida 50,000 s kerak!")
+# --- ADMIN BUYRUQLARI (YANGILANGAN) ---
+@bot.message_handler(commands=['malumot', 'backup', 'qarz_ber', 'qarz_ol', 'plus_balans', 'user'])
+def admin_panel(message):
+    if message.from_user.id != ADMIN_ID: return
+    c = message.text.split()
+    
+    # MUHIM: FOYDALANUVCHI MA'LUMOTINI ID ORQALI KO'RISH
+    if c[0] == '/user' and len(c) == 2:
+        target_id = c[1]
+        u = db_op("SELECT name, phone, balance, debt, total_nasiya_taken FROM users WHERE id=?", (target_id,), is_select=True)
+        if u:
+            r = u[0]
+            msg = (f"👤 **Foydalanuvchi ma'lumotlari:**\n\n"
+                   f"📝 Ism: {r[0]}\n"
+                   f"📞 Tel: {r[1]}\n"
+                   f"💰 Balans: {r[2]:,.0f} s\n"
+                   f"🔴 Qarz: {r[3]:,.0f} s\n"
+                   f"🔄 Nasiyalar soni: {r[4]} ta\n"
+                   f"🆔 ID: `{target_id}`")
+            bot.send_message(ADMIN_ID, msg, parse_mode="Markdown")
         else:
-            db_op("UPDATE users SET balance = balance - 50000 WHERE id=?", (uid,))
-            res = bot.send_dice(uid, emoji='🎰')
-            time.sleep(4)
-            if res.dice.value in [1, 22, 43, 64]:
-                db_op("UPDATE users SET balance = balance + 110000 WHERE id=?", (uid,))
-                bot.send_message(uid, "🎉 YUTDINGIZ! +110,000 s")
-            else: bot.send_message(uid, "😔 Yutqazdingiz.")
+            bot.send_message(ADMIN_ID, "❌ Bunday ID dagi foydalanuvchi topilmadi.")
 
-    elif text == "👨‍💻 Admin murojaat":
-        bot.send_message(uid, f"Admin: {ADMIN_LINK}")
+    elif c[0] == '/malumot':
+        res = db_op("SELECT id, name, balance FROM users", is_select=True)
+        out = "📊 **Barcha foydalanuvchilar:**\n"
+        for r in res: out += f"🆔 `{r[0]}` | {r[1]} | {r[2]:,.0f} s\n"
+        bot.send_message(ADMIN_ID, out[:4000], parse_mode="Markdown")
+    
+    elif c[0] == '/backup':
+        with open('casino_uzb.db', 'rb') as f: bot.send_document(ADMIN_ID, f)
+    
+    elif len(c) >= 3:
+        target, amt = int(c[1]), float(c[2])
+        if 'qarz_ber' in c[0]:
+            db_op("UPDATE users SET debt = debt + ?, debt_time = ? WHERE id=?", (amt, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), target))
+        elif 'qarz_ol' in c[0]:
+            db_op("UPDATE users SET debt = 0 WHERE id=?", (target,))
+        elif 'plus_balans' in c[0]:
+            db_op("UPDATE users SET balance = balance + ? WHERE id=?", (amt, target))
+        bot.send_message(ADMIN_ID, "Bajarildi! ✅")
+
+# --- PUL YECHISH VA CALLBACKLAR (AVVALGI KODDAGIDEK) ---
+def withdraw_amount(message):
+    try:
+        amt = float(message.text)
+        bot.send_message(message.chat.id, "💳 Karta raqamini kiriting:")
+        bot.register_next_step_handler(message, lambda m: withdraw_owner(m, amt))
+    except: pass
+
+def withdraw_owner(message, amt):
+    card = message.text
+    bot.send_message(message.chat.id, "👤 Karta egasining ism-familiyasi:")
+    bot.register_next_step_handler(message, lambda m: withdraw_phone(m, amt, card))
+
+def withdraw_phone(message, amt, card):
+    owner = message.text
+    bot.send_message(message.chat.id, "📞 Telefon raqami:")
+    bot.register_next_step_handler(message, lambda m: withdraw_final(m, amt, card, owner))
+
+def withdraw_final(message, amt, card, owner):
+    phone = message.text
+    uid = message.from_user.id
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("✅ Tastiqlash", callback_data=f"wd_v_{uid}_{amt}"),
+               types.InlineKeyboardButton("❌ Rad etish", callback_data=f"wd_x_{uid}"))
+    bot.send_message(ADMIN_ID, f"💸 **YECHISH**\nSumma: {amt:,}\nKarta: {card}\nEgasi: {owner}\nTel: {phone}\nID: `{uid}`", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(uid, "✅ So'rov yuborildi.")
+
+@bot.callback_query_handler(func=lambda call: True)
+def cb_handler(call):
+    d = call.data.split("_")
+    uid = int(d[2])
+    if d[0] == "pay":
+        if d[1] == "v":
+            amt = float(d[3])
+            db_op("UPDATE users SET debt = CASE WHEN debt > ? THEN debt - ? ELSE 0 END WHERE id=?", (amt, amt, uid))
+            bot.send_message(uid, "✅ To'lov tasdiqlandi!")
+        bot.edit_message_text("Bajarildi", call.message.chat.id, call.message.message_id)
+    elif d[0] == "wd" and d[1] == "v":
+        amt = float(d[3])
+        db_op("UPDATE users SET balance = balance - ? WHERE id=?", (amt, uid))
+        bot.send_message(uid, "✅ Pul o'tkazildi!")
+        bot.edit_message_text("Bajarildi", call.message.chat.id, call.message.message_id)
 
 def process_nasiya(message, limit):
     try:
         amt = float(message.text)
         if 10000 <= amt <= limit:
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("Tasdiqlash ✅", callback_data=f"nas_v_{amt}"))
-            bot.send_message(message.chat.id, f"{amt:,} UZS nasiya olasizmi?", reply_markup=markup)
-        else:
-            bot.send_message(message.chat.id, f"❌ Xato! Summa 10,000 va {limit:,} UZS orasida bo'lishi kerak.")
-    except: bot.send_message(message.chat.id, "Faqat son kiriting!")
-
-# --- ADMIN BUYRUQLARI ---
-@bot.message_handler(commands=['malumot', 'backup', 'qarz_ber', 'qarz_ol'])
-def admin_cmd(message):
-    if message.from_user.id != ADMIN_ID: return
-    c = message.text.split()
-    if c[0] == '/malumot':
-        res = db_op("SELECT name, phone, balance, debt FROM users", is_select=True)
-        out = "📋 Foydalanuvchilar:\n"
-        for r in res: out += f"👤 {r[0]} | {r[1]} | B: {r[2]:,} | Q: {r[3]:,}\n"
-        bot.send_message(ADMIN_ID, out[:4000])
-    elif c[0] == '/backup':
-        with open('casino_uzb.db', 'rb') as f: bot.send_document(ADMIN_ID, f)
-
-@bot.callback_query_handler(func=lambda call: True)
-def cb(call):
-    d = call.data.split("_")
-    uid = call.from_user.id
-    if d[0] == "nas" and d[1] == "v":
-        amt = float(d[2])
-        db_op("UPDATE users SET balance = balance + ?, debt = debt + ?, debt_time = ?, total_nasiya_taken = total_nasiya_taken + 1 WHERE id=?", 
-              (amt, amt, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), uid))
-        bot.edit_message_text(f"✅ {amt:,} UZS hisobingizga qo'shildi.", call.message.chat.id, call.message.message_id)
-
-# Pul yechish va To'lov boshlanishi (avvalgi koddagidek davom etadi)
-def withdraw_init(message):
-    try:
-        amt = float(message.text)
-        bot.send_message(message.chat.id, "Karta raqami va ismingizni yozing:")
-        bot.register_next_step_handler(message, lambda m: bot.send_message(ADMIN_ID, f"YECHISH: {amt:,}\nKarta: {m.text}\nID: {uid}"))
+            db_op("UPDATE users SET balance = balance + ?, debt = debt + ?, debt_time = ?, total_nasiya_taken = total_nasiya_taken + 1 WHERE id=?", 
+                  (amt, amt, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), message.from_user.id))
+            bot.send_message(message.chat.id, f"✅ {amt:,} s berildi.", reply_markup=main_menu())
+        else: bot.send_message(message.chat.id, "Limit xato!", reply_markup=main_menu())
     except: pass
 
-def pay_start(message):
+def pay_init(message):
     try:
         amt = float(message.text)
-        bot.send_message(ADMIN_ID, f"TO'LOV: {amt:,} s\nID: {message.from_user.id}")
-        bot.send_message(message.chat.id, "Adminga yuborildi.")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ Tastiqlash", callback_data=f"pay_v_{message.from_user.id}_{amt}"),
+                   types.InlineKeyboardButton("❌ Rad etish", callback_data=f"pay_x_{message.from_user.id}"))
+        bot.send_message(ADMIN_ID, f"💳 TO'LOV: {amt:,}\nID: `{message.from_user.id}`", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(message.chat.id, "✅ Adminga yuborildi.")
     except: pass
 
 bot.infinity_polling()
+    
                 
 
 
