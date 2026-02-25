@@ -2,16 +2,18 @@ import telebot
 from telebot import types
 import time
 
-# --- SOZLAMALAR (Rasmlardagi ma'lumotlar asosida) ---
-TOKEN = '8609558089:AAExg_SveE69KxS9R778fXm_6m85mK_Dq18' #
-ADMIN_ID = 5988166567 #
+# --- SOZLAMALAR ---
+# Siz bergan yangi token va rasmdagi admin ID
+TOKEN = '8609558089:AAExgvs1_XR5jlj9RGC55zZStvc7nV_Z6hE' 
+ADMIN_ID = 5988166567 
 bot = telebot.TeleBot(TOKEN)
 
-# Foydalanuvchi ma'lumotlarini vaqtinchalik saqlash (Xotirada)
+# Foydalanuvchi ma'lumotlarini vaqtinchalik xotirada saqlash
 users = {}
 
 def get_user(user_id):
     if user_id not in users:
+        # Boshlang'ich balans va holatlar
         users[user_id] = {'balance': 50000, 'loan': 0, 'card': '', 'name': ''}
     return users[user_id]
 
@@ -44,9 +46,9 @@ def process_loan(message):
         user['loan'] += amount
         bot.send_message(message.chat.id, f"✅ Qarz berildi: {amount:,} s\nBalans: {user['balance']:,} s")
     except:
-        bot.send_message(message.chat.id, "Faqat raqam kiriting!")
+        bot.send_message(message.chat.id, "Iltimos, faqat raqam kiriting!")
 
-# --- 2. O'YINLAR TIZIMI ---
+# --- 2. O'YINLAR TIZIMI (XAVFSIZ VA QIZIQARLI) ---
 @bot.message_handler(func=lambda message: message.text == "🎰 O'yinlar")
 def games(message):
     markup = types.InlineKeyboardMarkup()
@@ -70,28 +72,28 @@ def play_game(call):
     else:
         bot.send_message(call.message.chat.id, f"😟 Yutqazdingiz. Balans: {user['balance']:,} s")
 
-# --- 3. PUL YECHISH (ZANJIRLI TIZIM) ---
+# --- 3. PUL YECHISH ZANJIRI (UXLAB QOLMAYDIGAN) ---
 @bot.message_handler(func=lambda message: message.text == "💳 Pul yechish")
 def withdraw_step1(message):
-    msg = bot.send_message(message.chat.id, "Karta raqamingizni yozing:", reply_markup=types.ReplyKeyboardRemove())
+    msg = bot.send_message(message.chat.id, "1. Karta raqamingizni yozing:", reply_markup=types.ReplyKeyboardRemove())
     bot.register_next_step_handler(msg, withdraw_step2)
 
 def withdraw_step2(message):
     user = get_user(message.chat.id)
     user['card'] = message.text
-    msg = bot.send_message(message.chat.id, "Karta egasining ism va familiyasini yozing:")
+    msg = bot.send_message(message.chat.id, "2. Karta egasining ism va familiyasini yozing:")
     bot.register_next_step_handler(msg, withdraw_step3)
 
 def withdraw_step3(message):
     user = get_user(message.chat.id)
     user['name'] = message.text
-    msg = bot.send_message(message.chat.id, "Qancha yechmoqchisiz?")
+    msg = bot.send_message(message.chat.id, "3. Qancha yechmoqchisiz? (Summani kiriting):")
     bot.register_next_step_handler(msg, withdraw_final)
 
 def withdraw_final(message):
     user = get_user(message.chat.id)
     amount = message.text
-    # Adminga Inline tugmalar bilan yuborish
+    # Adminga tasdiqlash tugmalari bilan yuborish
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("✅ Pul tushdi", callback_data=f"pay_ok_{message.chat.id}"),
                types.InlineKeyboardButton("❌ Pul tushmadi", callback_data=f"pay_no_{message.chat.id}"))
@@ -114,20 +116,12 @@ def admin_answer(call):
 @bot.message_handler(func=lambda message: message.text == "💰 Balans")
 def check_bal(message):
     user = get_user(message.chat.id)
-    bot.send_message(message.chat.id, f"Balans: {user['balance']:,} s\nQarz: {user['loan']:,} s")
+    bot.send_message(message.chat.id, f"💰 Balans: {user['balance']:,} s\n💸 Qarz: {user['loan']:,} s")
 
-# Botni ishga tushirish (Railway uchun)
+# Railway uchun barqaror ishga tushirish
 bot.polling(none_stop=True)
-                     
-        
-        
-        
-    
-                
 
-
-
-        
+       
 
     
             
