@@ -7,9 +7,7 @@ from datetime import datetime, timedelta
 
 # --- KONFIGURATSIYA ---
 TOKEN = '8609558089:AAExgvs1_XR5jlj9RGC55zZStvc7nV_Z6hE'
-ADMIN_ID = 8299021738  # Sizning yangi ID raqamingiz
-ADMIN_USER = "@Vebiy_001" # Sizning usernameingiz
-ADMIN_KARTA = "9860 6067 5582 9722"
+ADMIN_ID = 8299021738 
 bot = telebot.TeleBot(TOKEN)
 
 users = {}
@@ -17,100 +15,40 @@ users = {}
 def get_user(uid):
     if uid not in users:
         users[uid] = {
-            'reg': False, 'name': '', 'phone': '', 'age': 0,
-            'balance': 0, 'loan': 0, 'loan_time': None, 
-            'deposit': 0, 'last_scare': None, 'referrals': 0
+            'reg': False, 'name': '', 'phone': '', 'balance': 0, 
+            'loan': 0, 'loan_time': None, 'last_scare': None
         }
     return users[uid]
 
-# --- 1. BALANS VA PENYA HISOBLASH ---
-def get_balance_info(uid):
+# --- 1. QARZ VA PENYA HISOBLASH ---
+def calculate_loan(uid):
     user = get_user(uid)
     penya = 0
-    total_to_pay = user['loan']
-    
     if user['loan'] > 0 and user['loan_time']:
         passed = datetime.now() - user['loan_time']
         hours = int(passed.total_seconds() // 3600)
-        
         if hours > 12:
-            # 12 soatdan keyin har 1 soat uchun 5% penya
-            penya_hours = hours - 12
-            penya = int(user['loan'] * 0.05 * penya_hours)
-            total_to_pay += penya
-            
-    return user['balance'], user['loan'], penya, total_to_pay
+            # 12 soatdan keyin har 1 soatda 5% penya
+            penya = int(user['loan'] * 0.05 * (hours - 12))
+    return user['loan'], penya, (user['loan'] + penya)
 
-# --- 2. QO'RQITISH TIZIMI (HAR 2 SOATDA) ---
-def scare_system():
-    while True:
-        now = datetime.now()
-        for uid, u in users.items():
-            if u['loan'] > 0 and u['loan_time']:
-                passed = now - u['loan_time']
-                if passed > timedelta(hours=12):
-                    if not u['last_scare'] or (now - u['last_scare']) > timedelta(hours=2):
-                        try:
-                            msg = ("🛑 **DIQQAT: MUDDAT O'TDI!**\n\n"
-                                   "Sizning qarzni qaytarish vaqtingiz tugagan! ⚠️\n"
-                                   "Hozirda har soatda **5% penya** qo'shilmoqda.\n\n"
-                                   "Agar qarzni darhol to'lamasangiz, profilingiz bloklanadi va ma'lumotlaringiz adminga topshiriladi!")
-                            bot.send_message(uid, msg, parse_mode="Markdown")
-                            u['last_scare'] = now
-                        except: pass
-        time.sleep(60)
-
-threading.Thread(target=scare_system, daemon=True).start()
-
-# --- 3. MENYULAR ---
-def main_menu():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("🎰 777 O'yini", "💰 Balans")
-    markup.row("💳 Depozit qilish", "💸 Qarz olish")
-    markup.row("🏦 Qarzni to'lash", "ℹ️ Ma'lumot")
-    return markup
-
-# --- 4. ASOSIY FUNKSIYALAR ---
-@bot.message_handler(func=lambda m: m.text == "💰 Balans")
-def bal_view(message):
-    b, l, p, total = get_balance_info(message.chat.id)
-    text = (f"💰 **Sizning hisobingiz:**\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"💵 Naqd balans: {b:,} UZS\n"
-            f"💸 Asosiy qarz: {l:,} UZS\n"
-            f"⚠️ To'plangan penya: {p:,} UZS\n"
-            f"🚀 Jami to'lanishi kerak: **{total:,} UZS**")
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "🏦 Qarzni to'lash")
-def pay_loan(message):
-    b, l, p, total = get_balance_info(message.chat.id)
-    if l == 0:
-        bot.send_message(message.chat.id, "✅ Sizning qarzingiz yo'q!")
-        return
-    
-    if b >= total:
-        user = get_user(message.chat.id)
-        user['balance'] -= total
-        user['loan'] = 0
-        user['loan_time'] = None
-        bot.send_message(message.chat.id, f"✅ Qarz to'liq yopildi! Balansdan {total:,} UZS ayirildi.")
-    else:
-        bot.send_message(message.chat.id, f"❌ Balansda mablag' yetarli emas!\nTo'lash uchun: {total:,} UZS kerak.\nBalansingiz: {b:,} UZS.\n\nIltimos, depozit orqali balansni to'ldiring.")
-
+# --- 2. QARZ OLISH (OGOHLANTIRISH BILAN) ---
 @bot.message_handler(func=lambda m: m.text == "💸 Qarz olish")
 def loan_start(message):
     user = get_user(message.chat.id)
     if user['loan'] > 0:
-        bot.send_message(message.chat.id, "⚠️ Sizda to'lanmagan qarz bor! Avvalgisini to'lamasdan yangi qarz olish taqiqlanadi.")
+        bot.send_message(message.chat.id, "⚠️ Sizda yopilmagan qarz bor! Avvalgisini to'lamasdan yangi qarz olish mumkin emas.")
         return
-    
-    text = ("📜 **QARZ SHARTLARI:**\n"
-            "- 12 soatgacha: 0%\n"
-            "- 12 soatdan keyin: Har soatda +5%\n"
-            "- To'lanmasa: Har 2 soatda ogohlantirish.\n\n"
-            "Summani kiriting (100k - 1mln):")
-    msg = bot.send_message(message.chat.id, text, parse_mode="Markdown")
+
+    # Qarz olishdan oldin ogohlantirish
+    warning_text = (
+        "⚠️ **DIQQAT: QARZ OLISH SHARTLARI!**\n\n"
+        "1. Qarz muddati: **12 soat** (0%).\n"
+        "2. 12 soatdan keyin: Har soatda **5% penya** qo'shiladi.\n"
+        "3. To'lanmasa: Har 2 soatda qat'iy ogohlantirish xabarlari yuboriladi.\n\n"
+        "Shartlarga rozimisiz? Rozilikingizni tasdiqlash uchun qarz miqdorini yozing (100,000 - 1,000,000):"
+    )
+    msg = bot.send_message(message.chat.id, warning_text, parse_mode="Markdown")
     bot.register_next_step_handler(msg, loan_process)
 
 def loan_process(message):
@@ -122,63 +60,86 @@ def loan_process(message):
             user['balance'] += amt
             user['loan_time'] = datetime.now()
             bot.send_message(message.chat.id, f"✅ {amt:,} UZS qarz berildi. 12 soat ichida qaytaring!")
-        else: bot.send_message(message.chat.id, "❌ Limit 100,000 - 1,000,000 UZS.")
-    except: bot.send_message(message.chat.id, "⚠️ Faqat raqam yozing!")
+            bot.send_message(ADMIN_ID, f"🛡 **Qarz olindi:**\nUser: {user['name']}\nSumma: {amt:,} UZS")
+        else:
+            bot.send_message(message.chat.id, "❌ Limit: 100,000 - 1,000,000 UZS.")
+    except:
+        bot.send_message(message.chat.id, "⚠️ Faqat raqam kiriting!")
 
-# --- 5. ADMIN VA MA'LUMOT ---
-@bot.message_handler(func=lambda m: m.text == "ℹ️ Ma'lumot")
-def info_btn(message):
-    user = get_user(message.chat.id)
-    if message.chat.id == ADMIN_ID:
-        text = f"💎 **ADMIN PANEL**\nFoydalanuvchilar: {len(users)}\nAdmin: {ADMIN_USER}\n\n/statistika - Jami ma'lumot\n/qarzdorlar - Qarzdorlar ro'yxati"
-        bot.send_message(ADMIN_ID, text)
+# --- 3. QARZNI TO'LASH (ADMIN TASDIQI BILAN) ---
+@bot.message_handler(func=lambda m: m.text == "🏦 Qarzni to'lash")
+def pay_loan_init(message):
+    l, p, total = calculate_loan(message.chat.id)
+    if l == 0:
+        bot.send_message(message.chat.id, "✅ Sizning qarzingiz yo'q.")
+        return
+    
+    msg = bot.send_message(message.chat.id, f"💰 Jami qarzingiz (penya bilan): {total:,} UZS.\nQancha to'lamoqchisiz?")
+    bot.register_next_step_handler(msg, pay_loan_request)
+
+def pay_loan_request(message):
+    try:
+        amt = int(re.sub(r'\D', '', message.text))
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ Tastiqlayman", callback_data=f"pay_ok_{message.chat.id}_{amt}"),
+                   types.InlineKeyboardButton("❌ XATO", callback_data=f"pay_no_{message.chat.id}"))
+        
+        # Adminga tasdiqlash uchun yuborish
+        bot.send_message(ADMIN_ID, f"🏦 **Qarz to'lash so'rovi!**\nFoydalanuvchi: {message.chat.id}\nSumma: {amt:,} UZS", reply_markup=markup)
+        bot.send_message(message.chat.id, "⌛️ To'lov so'rovi adminga yuborildi. Tasdiqlashni kiting.")
+    except:
+        bot.send_message(message.chat.id, "⚠️ Miqdorni raqamda yozing!")
+
+# --- 4. CALLBACK (ADMIN TASDIQLASHI UCHUN) ---
+@bot.callback_query_handler(func=lambda c: c.data.startswith('pay_'))
+def pay_callback(call):
+    data = call.data.split('_')
+    uid = int(data[2])
+    if data[1] == 'ok':
+        amt = int(data[3])
+        user = get_user(uid)
+        # Qarzni ayirish mantiqi
+        if amt >= user['loan']:
+            user['loan'] = 0
+            user['loan_time'] = None
+        else:
+            user['loan'] -= amt
+        
+        bot.send_message(uid, f"✅ Qarz to'lovingiz tasdiqlandi! Balansdan {amt:,} UZS ayirildi.")
+        bot.edit_message_text(f"✅ Tasdiqlandi ({amt:,} UZS)", call.message.chat.id, call.message.message_id)
     else:
-        text = f"👤 Ism: {user['name']}\n🎂 Yosh: {user['age']}\n📞 Tel: {user['phone']}\n💰 Balans: {user['balance']:,}"
-        bot.send_message(message.chat.id, text)
+        bot.send_message(uid, "❌ Qarz to'lovi rad etildi (Xato miqdor).")
+        bot.edit_message_text("❌ Rad etildi", call.message.chat.id, call.message.message_id)
 
-@bot.message_handler(commands=['statistika'])
-def admin_stat(message):
-    if message.chat.id == ADMIN_ID:
-        total_loans = sum(u['loan'] for u in users.values())
-        bot.send_message(ADMIN_ID, f"📊 Jami foydalanuvchilar: {len(users)}\n💸 Jami qarzlar: {total_loans:,} UZS")
+# --- 5. QO'RQITISH TIZIMI (HAR 2 SOATDA) ---
+def scare_loop():
+    while True:
+        now = datetime.now()
+        for uid, u in users.items():
+            if u['loan'] > 0 and u['loan_time']:
+                if (now - u['loan_time']) > timedelta(hours=12):
+                    if not u['last_scare'] or (now - u['last_scare']) > timedelta(hours=2):
+                        try:
+                            bot.send_message(uid, "‼️ **OGOHLANTIRISH!** Qarz muddati o'tdi. Har soatda 5% penya qo'shilmoqda! Tezroq to'lang!")
+                            u['last_scare'] = now
+                        except: pass
+        time.sleep(60)
 
-# --- RO'YXATDAN O'TISH ---
+threading.Thread(target=scare_loop, daemon=True).start()
+
+# --- ASOSIY MENYU ---
+def main_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("🎰 777 O'yini", "💰 Balans")
+    markup.row("💳 Pul yechish", "💸 Qarz olish")
+    markup.row("🏦 Qarzni to'lash", "ℹ️ Ma'lumot")
+    return markup
+
 @bot.message_handler(commands=['start'])
-def welcome(message):
-    user = get_user(message.chat.id)
-    if not user['reg']:
-        msg = bot.send_message(message.chat.id, "👋 Salom! Ismingizni yozing:")
-        bot.register_next_step_handler(msg, reg_name)
-    else: bot.send_message(message.chat.id, "Asosiy menyu:", reply_markup=main_menu())
-
-def reg_name(message):
-    user = get_user(message.chat.id)
-    user['name'] = message.text
-    msg = bot.send_message(message.chat.id, "Yoshingizni yozing:")
-    bot.register_next_step_handler(msg, reg_age)
-
-def reg_age(message):
-    user = get_user(message.chat.id)
-    user['age'] = message.text
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    markup.add(types.KeyboardButton("📲 Raqam yuborish", request_contact=True))
-    msg = bot.send_message(message.chat.id, "Raqamingizni yuboring:", reply_markup=markup)
-    bot.register_next_step_handler(msg, reg_phone)
-
-def reg_phone(message):
-    user = get_user(message.chat.id)
-    if message.contact:
-        user['phone'] = message.contact.phone_number
-        user['reg'] = True
-        bot.send_message(message.chat.id, "✅ Ro'yxatdan o'tdingiz!", reply_markup=main_menu())
-    else: bot.register_next_step_handler(bot.send_message(message.chat.id, "Tugmani bosing!"), reg_phone)
+def start_bot(message):
+    bot.send_message(message.chat.id, "Xush kelibsiz!", reply_markup=main_menu())
 
 bot.polling(none_stop=True)
 
-    
-    
-            
-        
-        
     
   
